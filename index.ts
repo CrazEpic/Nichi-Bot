@@ -3,7 +3,7 @@ import fs from "node:fs"
 import path from "node:path"
 import { token } from "./config.json"
 
-const client = new Client({ intents: [GatewayIntentBits.Guilds] })
+const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.GuildMessageReactions] })
 
 declare module "discord.js" {
 	export interface Client {
