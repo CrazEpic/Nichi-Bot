@@ -1,9 +1,19 @@
-import { SlashCommandBuilder } from "discord.js"
+import {
+	ActionRowBuilder,
+	ButtonBuilder,
+	ButtonStyle,
+	ComponentType,
+	EmbedBuilder,
+	SlashCommandBuilder,
+} from "discord.js"
 import type { CommandInteraction } from "discord.js"
 import { nanoid } from "nanoid"
 import { PrismaClient } from "@prisma/client"
 
 const prisma = new PrismaClient()
+
+const SCHEDULE_LIMIT = 10
+const TASK_LIMIT = 10
 
 interface Command {
 	data: SlashCommandBuilder
@@ -23,9 +33,6 @@ module.exports = {
 						.setName("name")
 						.setDescription("schedule name")
 						.setRequired(true)
-				)
-				.addUserOption((option) =>
-					option.setName("target").setDescription("The user")
 				)
 		)
 		.addSubcommand((subcommand) =>
@@ -68,8 +75,8 @@ module.exports = {
 		)
 		.addSubcommand((subcommand) =>
 			subcommand
-				.setName("show")
-				.setDescription("Show information about a schedule")
+				.setName("view")
+				.setDescription("View information about a schedule")
 				.addStringOption((option) =>
 					option
 						.setName("name")
@@ -79,12 +86,50 @@ module.exports = {
 		),
 	async execute(interaction) {
 		if (interaction.options.getSubcommand() === "create") {
-			if (
-				interaction.guildId &&
-				interaction.channelId &&
-				interaction.options.getString("name")
-			) {
-				await prisma.schedule.create({
+			await createSchedule(interaction)
+		} else if (interaction.options.getSubcommand() === "delete") {
+			await deleteSchedule(interaction)
+		} else if (interaction.options.getSubcommand() === "subscribe") {
+			await subscribeToSchedule(interaction)
+		} else if (interaction.options.getSubcommand() === "unsubscribe") {
+			await unsubscribeFromSchedule(interaction)
+		} else if (interaction.options.getSubcommand() === "list") {
+			await listSchedules(interaction)
+		} else if (interaction.options.getSubcommand() === "view") {
+			await viewSchedule(interaction)
+		}
+	},
+}
+
+const responseMessage = async (
+	interaction,
+	content: string,
+	ephemeral: boolean = false
+) => {
+	await interaction.reply({
+		content: content,
+		ephemeral: ephemeral,
+	})
+}
+
+const createSchedule = async (interaction: any) => {
+	if (
+		interaction.guildId &&
+		interaction.channelId &&
+		interaction.options.getString("name")
+	) {
+		const allSchedulesInChannel = await prisma.schedule.findMany({
+			where: {
+				guild: interaction.guildId,
+				channel: interaction.channelId,
+			},
+		})
+		const index: number = allSchedulesInChannel.findIndex((schedule) => {
+			return schedule.name === interaction.options.getString("name")
+		})
+		if (index == -1) {
+			if (allSchedulesInChannel.length < SCHEDULE_LIMIT) {
+				const schedule = await prisma.schedule.create({
 					data: {
 						id: nanoid(),
 						name: interaction.options.getString("name"),
@@ -92,66 +137,263 @@ module.exports = {
 						channel: interaction.channelId,
 					},
 				})
-				await interaction.reply({
-					content: `Created a schedule for ${interaction.guild?.name} in ${interaction.channel}`,
-				})
+				responseMessage(
+					interaction,
+					`Created schedule ${schedule.name} in ${interaction.channel}`
+				)
 			} else {
-				await interaction.reply({
-					content: `Failed to create a schedule`,
-				})
+				responseMessage(
+					interaction,
+					`Too many schedules in ${interaction.channel}. The limit is ${SCHEDULE_LIMIT}`
+				)
 			}
-		} else if (interaction.options.getSubcommand() === "delete") {
-			if (
-				interaction.guildId &&
-				interaction.channelId &&
-				interaction.options.getString("name")
-			) {
-				const response = await prisma.schedule.findFirst({
-					where: {
-						name: interaction.options.getString("name"),
-						guild: interaction.guildId,
-						channel: interaction.channelId,
+		} else {
+			responseMessage(
+				interaction,
+				"Failed to create a schedule. Already exists."
+			)
+		}
+	} else {
+		responseMessage(interaction, "Failed to create a schedule")
+	}
+}
+
+const deleteSchedule = async (interaction: any) => {
+	if (
+		interaction.guildId &&
+		interaction.channelId &&
+		interaction.options.getString("name")
+	) {
+		const checkExists = await prisma.schedule.findFirst({
+			where: {
+				name: interaction.options.getString("name"),
+				guild: interaction.guildId,
+				channel: interaction.channelId,
+			},
+		})
+		if (checkExists) {
+			const schedule = await prisma.schedule.delete({
+				where: {
+					id: checkExists.id,
+				},
+			})
+			responseMessage(
+				interaction,
+				`Deleted schedule ${schedule.name} in ${interaction.channel}`
+			)
+		} else {
+			responseMessage(
+				interaction,
+				`Failed to delete a schedule. Does not exist in ${interaction.channel}`
+			)
+		}
+	} else {
+		responseMessage(interaction, "Failed to delete a schedule.")
+	}
+}
+
+const subscribeToSchedule = async (interaction: any) => {
+	if (
+		interaction.guildId &&
+		interaction.channelId &&
+		interaction.options.getString("name")
+	) {
+		const schedule = await prisma.schedule.findFirst({
+			where: {
+				name: interaction.options.getString("name"),
+				guild: interaction.guildId,
+				channel: interaction.channelId,
+			},
+			include: {
+				users: true,
+			},
+		})
+		if (schedule) {
+			await prisma.schedule.update({
+				where: {
+					id: schedule.id,
+				},
+				data: {
+					users: {
+						connectOrCreate: [
+							{
+								create: { id: interaction.user.id },
+								where: { id: interaction.user.id },
+							},
+						],
 					},
-				})
-				if (response) {
-					await prisma.schedule.delete({
-						where: {
-							id: response.id,
-						},
-					})
-					await interaction.reply({
-						content: `Deleted schedule ${response.name} for ${interaction.guild?.name} in ${interaction.channel}`,
-					})
-				} else {
-					await interaction.reply({
-						content: `Failed to delete a schedule`,
-					})
-				}
-			} else {
-				await interaction.reply({
-					content: `Failed to delete a schedule`,
-				})
-			}
-		} else if (interaction.options.getSubcommand() === "subscribe") {
-			if (
-				interaction.guildId &&
-				interaction.channelId &&
-				interaction.options.getString("name")
-			) {
-				const response = await prisma.schedule.findFirst({
-					where: {
-						name: interaction.options.getString("name"),
-						guild: interaction.guildId,
-						channel: interaction.channelId,
+				},
+			})
+			responseMessage(
+				interaction,
+				`${interaction.user} subscribed to ${schedule.name} in ${interaction.channel}`
+			)
+		} else {
+			responseMessage(
+				interaction,
+				"Failed to subscribe to schedule. Does not exist."
+			)
+		}
+	} else {
+		responseMessage(interaction, "Failed to subscribe to schedule")
+	}
+}
+
+const unsubscribeFromSchedule = async (interaction: any) => {
+	if (
+		interaction.guildId &&
+		interaction.channelId &&
+		interaction.options.getString("name")
+	) {
+		const schedule = await prisma.schedule.findFirst({
+			where: {
+				name: interaction.options.getString("name"),
+				guild: interaction.guildId,
+				channel: interaction.channelId,
+			},
+			include: {
+				users: true,
+			},
+		})
+		if (schedule) {
+			await prisma.schedule.update({
+				where: {
+					id: schedule.id,
+				},
+				data: {
+					users: {
+						disconnect: [{ id: interaction.user.id }],
 					},
-					include: {
-						users: true,
-					},
+				},
+			})
+			responseMessage(
+				interaction,
+				`${interaction.user} unsubscribed from ${schedule.name} in ${interaction.channel}`
+			)
+		} else {
+			responseMessage(
+				interaction,
+				"Failed to unsubscribe from schedule. Does not exist."
+			)
+		}
+	} else {
+		responseMessage(interaction, "Failed to unsubscribe from schedule.")
+	}
+}
+
+const emojiNumbers = {
+	"1": ":one:",
+	"2": ":two:",
+	"3": ":three:",
+	"4": ":four:",
+	"5": ":five:",
+	"6": ":six:",
+	"7": ":seven:",
+	"8": ":eight:",
+	"9": ":nine:",
+	"10": ":keycap_ten:",
+}
+
+const listSchedules = async (interaction: any) => {
+	if (interaction.guildId && interaction.channelId) {
+		const schedules = await prisma.schedule.findMany({
+			where: {
+				guild: interaction.guildId,
+				channel: interaction.channelId,
+			},
+		})
+		if (schedules && schedules.length != 0) {
+			const schedulesEmbed = new EmbedBuilder()
+				.setColor(0xed7677)
+				.setTitle("SCHEDULES VIEWER")
+				.setDescription(`List of schedules in ${interaction.channel}`)
+			let i = 1
+			schedules.forEach((schedule) => {
+				schedulesEmbed.addFields({
+					name: emojiNumbers[i.toString()],
+					value: schedule.name,
 				})
-				if (response) {
+				i++
+			})
+			await interaction.reply({
+				embeds: [schedulesEmbed],
+			})
+		} else {
+			responseMessage(
+				interaction,
+				`No schedules were found in ${interaction.channel}`
+			)
+		}
+	} else {
+		responseMessage(interaction, "Error in finding schedules")
+	}
+}
+
+const viewSchedule = async (interaction: any) => {
+	if (
+		interaction.guildId &&
+		interaction.channelId &&
+		interaction.options.getString("name")
+	) {
+		const schedule = await prisma.schedule.findFirst({
+			where: {
+				name: interaction.options.getString("name"),
+				guild: interaction.guildId,
+				channel: interaction.channelId,
+			},
+			include: {
+				tasks: true,
+			},
+		})
+		if (schedule) {
+			const scheduleEmbed = new EmbedBuilder()
+				.setColor(0xed7677)
+				.setTitle("SCHEDULE VIEWER")
+				.setDescription(`${interaction.channel} ${schedule.name}\n`)
+			schedule.tasks.forEach((task) => {
+				scheduleEmbed.addFields({
+					name: `${task.emoji}`,
+					value: `${task.description}`,
+				})
+			})
+
+			const edit = new ButtonBuilder()
+				.setCustomId("edit-schedule")
+				.setLabel("edit")
+				.setStyle(ButtonStyle.Primary)
+
+			const join = new ButtonBuilder()
+				.setCustomId("join-schedule")
+				.setLabel("join")
+				.setStyle(ButtonStyle.Success)
+
+			const leave = new ButtonBuilder()
+				.setCustomId("leave-schedule")
+				.setLabel("leave")
+				.setStyle(ButtonStyle.Danger)
+			const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+				edit,
+				join,
+				leave
+			)
+			const message = await interaction.reply({
+				embeds: [scheduleEmbed],
+				components: [row],
+			})
+			const filter = (i) => i.user.id === interaction.user.id
+			const collector = message.createMessageComponentCollector({
+				componentType: ComponentType.Button,
+				filter,
+				time: 30_000,
+			})
+
+			collector.on("collect", async (interaction) => {
+				if (interaction.customId === "edit-schedule") {
+					await interaction.reply("edit schedule")
+				} else if (interaction.customId === "join-schedule") {
 					await prisma.schedule.update({
 						where: {
-							id: response.id,
+							id: schedule.id,
 						},
 						data: {
 							users: {
@@ -164,39 +406,14 @@ module.exports = {
 							},
 						},
 					})
-					await interaction.reply({
-						content: `${interaction.user} subscribed to ${response.name} for ${interaction.guild?.name} in ${interaction.channel}`,
-					})
-				} else {
-					await interaction.reply({
-						content: `Failed to subscribe to schedule`,
-					})
-				}
-			} else {
-				await interaction.reply({
-					content: `Failed to subscribe to schedule`,
-				})
-			}
-		} else if (interaction.options.getSubcommand() === "unsubscribe") {
-			if (
-				interaction.guildId &&
-				interaction.channelId &&
-				interaction.options.getString("name")
-			) {
-				const response = await prisma.schedule.findFirst({
-					where: {
-						name: interaction.options.getString("name"),
-						guild: interaction.guildId,
-						channel: interaction.channelId,
-					},
-					include: {
-						users: true,
-					},
-				})
-				if (response) {
+					responseMessage(
+						interaction,
+						`${interaction.user} subscribed to ${schedule.name} in ${interaction.channel}`
+					)
+				} else if (interaction.customId === "leave-schedule") {
 					await prisma.schedule.update({
 						where: {
-							id: response.id,
+							id: schedule.id,
 						},
 						data: {
 							users: {
@@ -204,72 +421,28 @@ module.exports = {
 							},
 						},
 					})
-					await interaction.reply({
-						content: `${interaction.user} unsubscribed from ${response.name} for ${interaction.guild?.name} in ${interaction.channel}`,
-					})
-				} else {
-					await interaction.reply({
-						content: `Failed to unsubscribe from schedule`,
-					})
+					responseMessage(
+						interaction,
+						`${interaction.user} unsubscribed from ${schedule.name} in ${interaction.channel}`
+					)
 				}
-			} else {
-				await interaction.reply({
-					content: `Failed to unsubscribe from schedule`,
+			})
+
+			collector.on("end", () => {
+				edit.setDisabled(true)
+				join.setDisabled(true)
+				leave.setDisabled(true)
+				message.edit({
+					componenets: [row],
 				})
-			}
-		} else if (interaction.options.getSubcommand() === "list") {
-			if (interaction.guildId && interaction.channelId) {
-				const response = await prisma.schedule.findMany({
-					where: {
-						guild: interaction.guildId,
-						channel: interaction.channelId,
-					},
-				})
-				if (response && response.length != 0) {
-					let lists: string = ""
-					response.forEach((list) => {
-						lists += `${list.name}\n`
-					})
-					await interaction.reply({
-						content: `${lists}`,
-					})
-				} else {
-					await interaction.reply({
-						content: `No schedules were found`,
-					})
-				}
-			} else {
-				await interaction.reply({
-					content: `No schedules were found`,
-				})
-			}
-		} else if (interaction.options.getSubcommand() === "list") {
-			if (
-				interaction.guildId &&
-				interaction.channelId &&
-				interaction.options.getString("name")
-			) {
-				const response = await prisma.schedule.findFirst({
-					where: {
-						name: interaction.options.getString("name"),
-						guild: interaction.guildId,
-						channel: interaction.channelId,
-					},
-				})
-				if (response) {
-					await interaction.reply({
-						content: `Name: ${response.name}\nChannel: ${interaction.channel}`
-					})
-				} else {
-					await interaction.reply({
-						content: `Unable to find schedule`,
-					})
-				}
-			} else {
-				await interaction.reply({
-					content: `Unable to find schedule`,
-				})
-			}
+			})
+		} else {
+			responseMessage(
+				interaction,
+				"Unable to view schedule. Does not exist."
+			)
 		}
-	},
+	} else {
+		responseMessage(interaction, "Unable to view schedule.")
+	}
 }
