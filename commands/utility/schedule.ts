@@ -8,13 +8,12 @@ interface Command {
 
 module.exports = {
 	data: new SlashCommandBuilder()
-		.setName("server")
-		.setDescription("Provides information about the server."),
+		.setName("schedule")
+		.setDescription("Create a daily task list!"),
 	async execute(interaction) {
-		if (interaction.guild !== null) {
-			await interaction.reply(
-				`This server is ${interaction.guild.name} and has ${interaction.guild.memberCount} members.`
-			)
-		}
+		const message = await interaction.reply({
+			content: "Pong!",
+			fetchReply: true,
+		})
 	},
 } satisfies Command
