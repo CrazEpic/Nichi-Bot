@@ -7,18 +7,12 @@ interface Command {
 }
 
 module.exports = {
-	data: new SlashCommandBuilder()
-		.setName("ping")
-		.setDescription("Replies with Pong!"),
+	data: new SlashCommandBuilder().setName("ping").setDescription("Replies with Pong!"),
 	async execute(interaction) {
 		const sent = await interaction.reply({
 			content: "Pinging...",
 			fetchReply: true,
 		})
-		interaction.editReply(
-			`Pong!\nRoundtrip latency: ${
-				sent.createdTimestamp - interaction.createdTimestamp
-			}ms`
-		)
+		interaction.editReply(`Pong!\nRoundtrip latency: ${sent.createdTimestamp - interaction.createdTimestamp}ms`)
 	},
 } satisfies Command
