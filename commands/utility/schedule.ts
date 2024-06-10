@@ -2,17 +2,27 @@ import {
 	ActionRowBuilder,
 	ButtonBuilder,
 	ButtonStyle,
+	StringSelectMenuBuilder,
+	StringSelectMenuOptionBuilder,
 	ComponentType,
 	EmbedBuilder,
 	SlashCommandBuilder,
+	ModalBuilder,
+	TextInputBuilder,
+	TextInputStyle,
+	ModalActionRowComponentBuilder,
 } from "discord.js"
-import type { CommandInteraction } from "discord.js"
+import { CommandInteraction } from "discord.js"
 import { nanoid } from "nanoid"
+import {
+	checkDefaultEmoji,
+	convertDefaultEmoji,
+} from "../../utility/emojiMap.ts"
 import { PrismaClient } from "@prisma/client"
 
 const prisma = new PrismaClient()
 
-const SCHEDULE_LIMIT = 10
+const SCHEDULE_LIMIT = 5
 const TASK_LIMIT = 10
 
 interface Command {
@@ -357,24 +367,24 @@ const viewSchedule = async (interaction: any) => {
 				})
 			})
 
-			const edit = new ButtonBuilder()
-				.setCustomId("edit-schedule")
-				.setLabel("edit")
+			const editTask = new ButtonBuilder()
+				.setCustomId("edit-task")
+				.setLabel("Edit Task")
 				.setStyle(ButtonStyle.Primary)
 
-			const join = new ButtonBuilder()
-				.setCustomId("join-schedule")
-				.setLabel("join")
+			const addTask = new ButtonBuilder()
+				.setCustomId("add-task")
+				.setLabel("Add Task")
 				.setStyle(ButtonStyle.Success)
 
-			const leave = new ButtonBuilder()
-				.setCustomId("leave-schedule")
-				.setLabel("leave")
+			const removeTask = new ButtonBuilder()
+				.setCustomId("remove-task")
+				.setLabel("Remove Task")
 				.setStyle(ButtonStyle.Danger)
 			const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-				edit,
-				join,
-				leave
+				editTask,
+				addTask,
+				removeTask
 			)
 			const message = await interaction.reply({
 				embeds: [scheduleEmbed],
@@ -388,50 +398,170 @@ const viewSchedule = async (interaction: any) => {
 			})
 
 			collector.on("collect", async (interaction) => {
-				if (interaction.customId === "edit-schedule") {
-					await interaction.reply("edit schedule")
-				} else if (interaction.customId === "join-schedule") {
-					await prisma.schedule.update({
-						where: {
-							id: schedule.id,
-						},
-						data: {
-							users: {
-								connectOrCreate: [
-									{
-										create: { id: interaction.user.id },
-										where: { id: interaction.user.id },
+				if (interaction.customId === "edit-task") {
+					await interaction.reply("not implemented yet")
+				} else if (interaction.customId === "add-task") {
+					const modal = new ModalBuilder()
+						.setCustomId("modal-add-task")
+						.setTitle(`Add task to ${interaction.channel.name}`)
+					const taskEmojiInput = new TextInputBuilder()
+						.setCustomId("task-emoji")
+						.setLabel("Pick an emoji for your task!")
+						.setStyle(TextInputStyle.Short)
+						.setRequired(true)
+						.setMinLength(1)
+						.setPlaceholder("emoji name here")
+					const taskDescriptionInput = new TextInputBuilder()
+						.setCustomId("task-description")
+						.setLabel("Describe your task! (max 30 characters)")
+						.setStyle(TextInputStyle.Short)
+						.setRequired(true)
+						.setMinLength(1)
+						.setMaxLength(30)
+						.setPlaceholder("Do my Genshin Impact daily")
+					const firstActionRow =
+						new ActionRowBuilder<ModalActionRowComponentBuilder>().addComponents(
+							taskEmojiInput
+						)
+					const secondActionRow =
+						new ActionRowBuilder<ModalActionRowComponentBuilder>().addComponents(
+							taskDescriptionInput
+						)
+					modal.addComponents(firstActionRow, secondActionRow)
+					await interaction.showModal(modal)
+					const filter = (interaction) =>
+						interaction.customId === "modal-add-task"
+					interaction
+						.awaitModalSubmit({ filter, time: 60_000 })
+						.then(async (modalInteraction) => {
+							const taskEmoji: string =
+								modalInteraction.fields.getTextInputValue(
+									"task-emoji"
+								)
+							const taskDescription: string =
+								modalInteraction.fields.getTextInputValue(
+									"task-description"
+								)
+							let taskEmojiModified: string = `:${taskEmoji}:`
+							if (!checkDefaultEmoji(taskEmoji)) {
+								const serverEmoji =
+									interaction.guild.emojis.cache.find(
+										(emoji) => emoji.name === taskEmoji
+									)
+								if (!serverEmoji) {
+									interaction.followUp(
+										"Not a default or server emoji name"
+									)
+									return
+								}
+								taskEmojiModified = `<${taskEmojiModified}${serverEmoji.id}>`
+							}
+							if (
+								!schedule.tasks.find(
+									(task) => task.emoji === taskEmojiModified
+								) &&
+								schedule.tasks.length < TASK_LIMIT
+							) {
+								await prisma.task.create({
+									data: {
+										id: nanoid(),
+										scheduleID: schedule.id,
+										description: taskDescription,
+										emoji: taskEmojiModified,
 									},
-								],
-							},
-						},
+								})
+								modalInteraction.reply(
+									`Added task ${taskEmojiModified} to ${schedule.name}`
+								)
+							} else {
+								modalInteraction.reply(
+									`Too many tasks in ${schedule.name}. The limit is ${TASK_LIMIT}`
+								)
+							}
+						})
+						.catch(() => {
+							console.log("error")
+						})
+				} else if (interaction.customId === "remove-task") {
+					const tasks = schedule.tasks.map((task) => {
+						return {
+							label: task.emoji,
+							description: task.description,
+							value: task.emoji,
+						}
 					})
-					responseMessage(
-						interaction,
-						`${interaction.user} subscribed to ${schedule.name} in ${interaction.channel}`
-					)
-				} else if (interaction.customId === "leave-schedule") {
-					await prisma.schedule.update({
-						where: {
-							id: schedule.id,
-						},
-						data: {
-							users: {
-								disconnect: [{ id: interaction.user.id }],
-							},
-						},
+					const taskSelectMenu = new StringSelectMenuBuilder()
+						.setCustomId("string-select-remove-task")
+						.setPlaceholder("Make a selection")
+						.setMinValues(1)
+						.setMaxValues(tasks.length)
+						.addOptions(
+							tasks.map((task) => {
+								if (task.label.charAt(0) == ":") {
+									// default emoji
+									return new StringSelectMenuOptionBuilder()
+										.setLabel(nanoid())
+										.setDescription(task.description)
+										.setValue(task.value)
+										.setEmoji(
+											convertDefaultEmoji(
+												task.label.slice(
+													1,
+													task.label.length - 1
+												)
+											)
+										)
+								}
+								return new StringSelectMenuOptionBuilder()
+									.setLabel("task")
+									.setDescription(task.description)
+									.setValue(task.value)
+									.setEmoji(task.label)
+							})
+						)
+					const actionRow =
+						new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+							taskSelectMenu
+						)
+					const message = await interaction.reply({
+						content: "Pick tasks to remove (removes in 30 seconds)",
+						components: [actionRow],
+						fetchReply: true,
 					})
-					responseMessage(
-						interaction,
-						`${interaction.user} unsubscribed from ${schedule.name} in ${interaction.channel}`
-					)
+
+					const collector = message.createMessageComponentCollector({
+						componentType: ComponentType.StringSelect,
+						filter: (i) =>
+							i.user.id === interaction.user.id &&
+							i.customId === "string-select-remove-task",
+						time: 30_000,
+					})
+					collector.on("collect", async (i) => {
+						if (!i.values.length) {
+							await i.reply("Emptied selection")
+							return
+						}
+						await i.reply(`Selected ${i.values.join(", ")}!`)
+					})
+					collector.on("end", async (collected) => {
+						const tasksEmojisToRemove = collected.at(-1).values
+						await interaction.followUp(
+							`Deleting ${tasksEmojisToRemove}`
+						)
+						await prisma.task.deleteMany({
+							where: {
+								scheduleID: schedule.id,
+								emoji: { in: tasksEmojisToRemove },
+							},
+						})
+					})
 				}
 			})
 
 			collector.on("end", () => {
-				edit.setDisabled(true)
-				join.setDisabled(true)
-				leave.setDisabled(true)
+				editTask.setDisabled(true)
+				addTask.setDisabled(true)
+				removeTask.setDisabled(true)
 				message.edit({
 					componenets: [row],
 				})
